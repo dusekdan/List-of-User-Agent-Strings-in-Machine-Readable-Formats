@@ -1,2 +1,4 @@
 # Do not put scraper upstream until it is ready
-scraper.py
+venv
+.cache
+.vscode
