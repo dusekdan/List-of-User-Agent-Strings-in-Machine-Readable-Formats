@@ -1,3 +1,4 @@
+import importlib
 import os
 import time
 import sys
@@ -23,6 +24,7 @@ Let's think about the API this scraper should provide (command-line only for now
 (3) Specify language & format (copy-paste, pretty) that should be generated in the output
     - Link this to language support generators - so I, or other people, can easily create generator for new language
     - Estimated time to implement: 60-90 minutes
+    - Language actual effort: 25 minutes.
 
 (4) Number of results / and type of results generated feature 
     - e.g. "top 100" (based on the order they appear, there are no stats on the page)
@@ -31,7 +33,7 @@ Let's think about the API this scraper should provide (command-line only for now
     - Estimated time to implement: 60 minutes
 
 (5) Output file (-o/--output)
-    - Should have some sensible defaults
+    - Should have some sensible defaults (problem here: how to select between "normal" and "pretty" -> cant make both, doesnt make sense to allow user to specify output file if it is not going to be respected.)
     - Estimated time to implement: 15-20 minutes
 
 How different language generators should be implemented: 
@@ -46,8 +48,22 @@ How different language generators should be implemented:
 
 AGENT_SOURCE = "http://useragentstring.com/pages/useragentstring.php?name=All"
 CACHE_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
+GENERATOR_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generators")
+
+GENERATORS = {}
 
 def main():
+    LANGUAGES = []
+
+    load_generators()
+
+
+    if OPTS.languages != None:
+        LANGUAGES = OPTS.languages.split(',')
+    
+    # If language is not specified, use all available languages
+    if not LANGUAGES:
+        LANGUAGES = list(GENERATORS.keys())
 
     # If `--no-cache` is specified, retrieve latest version, otherwise
     # use what is locally available (given there is something locally
@@ -62,8 +78,54 @@ def main():
     soup = BeautifulSoup(raw_data, 'html.parser')
     li_elems = soup.findAll("li")
 
+    # Extra User Agent string from <li>s
+    user_agent_strings = []
     for li in li_elems:
-        print(li.text)
+        user_agent_strings.append(li.text)
+    
+    # Run generators for languages that are available/requested and vice versa.
+    for language in LANGUAGES:
+        if language in GENERATORS.keys():
+            GENERATORS[language].set_user_agents(user_agent_strings)
+
+            normal_string = GENERATORS[language].generate_user_agent_list_string()
+            pretty_string = GENERATORS[language].generate_user_agent_list_string_pretty()
+
+            # FUTURE: Allow selecting `normal|pretty` when providing `--output|-o` parameter. 
+            if OPTS.output != None:
+                filename = OPTS.output + "." + GENERATORS[language].get_extension()
+                dump_to_file(filename, normal_string)
+            else:
+                # `-o|--output` parameter was not provided - generate both
+                print("D: Should be writing to standardized files.")
+                filename = language + "_normal" + "." + GENERATORS[language].get_extension()
+                filename_pretty = language + "_pretty" + "." + GENERATORS[language].get_extension()
+                dump_to_file(filename, normal_string)
+                dump_to_file(filename_pretty, pretty_string)
+
+        else:
+            print(f"W: Generator for {language} was not found and file will not be generated.")
+
+def dump_to_file(filename, string):
+    """Just dumps content to a file."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), filename), "w", encoding="utf-8") as f:
+            f.write(string)
+    except Exception as e:
+        print(f"Couldn't write to {filename}") 
+
+def load_generators():
+    not_generator = ["__init__.py", ".", "..", "__pycache__"]
+    modules  = [m.split('.py')[0] for m in os.listdir(os.path.join(GENERATOR_FOLDER)) if m not in not_generator]
+
+    for module in modules:
+        try:
+            imported_module = importlib.import_module(f"generators.{module}")
+            instantiable = getattr(imported_module, module)
+            GENERATORS[module] = instantiable()
+            print(f"D: Generator for {module} added to generators. Total: {len(GENERATORS)}")
+        except AttributeError as e:
+            print(f"E: Unable to load generator for {module} from generators.{module} directory.")
 
 # Acquire raw source of the user agent page only once
 def get_useragents_source(sourceUrl):    
@@ -135,6 +197,7 @@ if __name__ == '__main__':
 
     parser.add_option('-o', '--output', action="store", type="string", dest="output")
     parser.add_option('-x', '--no-cache', action="store_true", dest="no_cache", default=False)
+    parser.add_option('-l', '--languages', action="store", type="string", dest="languages")
 
 
     (OPTS, ARGS) = parser.parse_args()
